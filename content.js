@@ -495,7 +495,6 @@ function toggleLoader(show) {
 async function init() {
   injectStyles();
   injectSidePanel();
-  testGemini();
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
