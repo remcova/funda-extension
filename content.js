@@ -24,15 +24,11 @@ async function extractPropertyInfo() {
 Dit is een verzoek om de volgende informatie uit JSON-data te halen:
 1. Titel (combinatie van straat, huisnummer, postcode en stad)
 2. Prijs
-3. Kenmerken (lijst met alle faciliteiten (min. 5 indien beschikbaar) zoals: tuin, garage, sauna, laadpaal, parkeerplek, warmtepomp, zolder en schuur).
+3. Kenmerken (lijst met alle faciliteiten zoals: tuin, garage, sauna, laadpaal, parkeerplek, warmtepomp, zolder en schuur.
 4. Beschrijving (Geef een samengevatte beschrijving van het pand, bij voorkeur onder 150 woorden)
 5. Details (vermeld indien beschikbaar: bouwjaar, soort woonhuis/huis, woonoppervlakte, bergruimte, aantal kamers, badkamer, woonlagen, badkamervoorzieningen, energielabel, verwarming, isolatie, gemeubileerd, gestoffeerd, permanente bewoning toegestaan, sauna, hottub)
 6. Geef een indicatie of de prijs van dit pand 'hoog', 'laag' of 'gemiddeld' is voor een investeerder. Baseer dit op
 het verschil tussen de vraagprijs en de woz waarde van het vorige jaar (het is nu ${new Date().getFullYear()}). Indien de 'Gem. vraagprijs / m²' beschikbaar is in de onderstaande JSON informatie, neem die ook mee in je conclusie. Hoe kleiner het verschil, hoe eerlijker de prijs.
-Neem ook deze factoren mee:
-Locatie: De locatie van de woning is een cruciale factor die de marktwaarde beïnvloedt. Factoren zoals de buurt, voorzieningen in de omgeving, bereikbaarheid en nabijheid van scholen, winkels en openbaar vervoer spelen een grote rol.
-Staat van de woning: De fysieke staat van de woning, inclusief leeftijd, grootte, kwaliteit van de bouw, voorzieningen, energiezuinigheid en eventuele renovaties of verbeteringen, bepaalt mede de marktwaarde.
-Vergelijkbare verkoopprijzen: Het vergelijken van de woning met vergelijkbare woningen die recentelijk zijn verkocht in dezelfde buurt of omgeving (vergelijkingsmethode) is een belangrijke variabele om de marktwaarde te bepalen.
 7. Geef een toelichting op je conclusie betreft de prijs. De conclusie is gericht op investeerders. 
 Onderbouw het met minimaal 3 argumenten, je verteld het aan een potentiële investeerder die met winst dit pand wil verhuren of verkopen.
 8. Noem ook 5 voor- en nadelen (als die er zijn) voor investeerders, zet de voor- en nadelen in een bullet point lijst met groene vinkjes en rode kruisjes. 
@@ -40,8 +36,6 @@ Onderbouw het met minimaal 3 argumenten, je verteld het aan een potentiële inve
 Houd je conclusies consistent en duidelijk voor investeerders voor alle punten bovengenoemde punten. Ga in op details.
 
 Retourneer in JSON-formaat met de keys 'title', 'price', 'features', 'description', 'details', 'price_comparison', 'price_comparison_explanation', 'pros', 'cons'.
-
-Data waaruit u de informatie moet halen:
 ${JSON.stringify(jsonData)}
 `;
 
@@ -540,45 +534,62 @@ async function getWozValues(address) {
 }
 
 async function predictFutureValues(wozWaarden, propertyInfo) {
-  const openaiApiKey = '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'; // Replace with your actual API key
-  const openaiEndpoint = 'https://api.openai.com/v1/chat/completions';
 
-  const prompt = `Je bent een vastgoed expert die de toekomstige waarde van een woning moet voorspellen.
+    const session = await ai.languageModel.create({
+      systemPrompt: "You are a real estate expert who predicts the future value of a property and returns it in CSV format."
+    });
 
-Gegeven de volgende WOZ-waarden van de afgelopen jaren:
-${JSON.stringify(wozWaarden)}
+    const prompt = `
+Make a prediction of the value evaluation for the next 5 years. You can base this on the WOZ values, previous years, current market, economic factors, etc. If it concerns a vacation home, include tourism factors. Provide the value for each year (the next 5 years).
 
-Gegeven de volgende informatie van de woning:
-titel: ${propertyInfo.title}
-titel: ${propertyInfo.features}
-titel: ${propertyInfo.details}
+Given the following WOZ values from previous years:
+${wozWaarden.map(woz => `WOZ waarde ${woz.peildatum}: €${woz.vastgesteldeWaarde}`).join('\n')}
 
+For each annual prediction, provide:
+1. A brief explanation of why the value increases, decreases or remains stable.
+2. List the sources or data on which you base your conclusion. These could include economic reports, market trends, or specific news articles. Name the sources specifically (websites, reports, etc.).
 
-Maak een predictie van de waarde evaluatie voor de komende 5 jaren. Je mag dit baseren op de woz waarden, voorgaande jaren, de huidige markt, economische factoren, etc. Als er sprake is van een recreatie woning, neem toeristische factoren mee. Geef voor elk jaar (de komende 5 jaren) de waarde op.
+The current year is ${new Date().getFullYear()}. Start the prediction from next year.
 
-Geef voor elke jaarlijkse voorspelling:
-1. Een korte verklaring waarin je uitlegt waarom de waarde stijgt, daalt of gelijk blijft.
-2. Vermeld de bronnen of gegevens waarop je je conclusie baseert. Dit kunnen bijvoorbeeld economische rapporten, markttrends, of specifieke nieuwsartikelen zijn. Noem de bronnen bij naam (websites, rapporten, etc.).
+Always return the predictions in this format:
+year,value,explanation,sources
+`;
 
-Het huidige jaar is ${new Date().getFullYear()}. Begin met de voorspelling vanaf het volgende jaar.
+    // console.log(prompt);
 
-Retourneer een JSON-object met de volgende structuur:
-{
-  "value_prediction": [
-    {"year": x, "value": 000000, "explanation": "...", "sources": "..."},
-    {"year": x, "value": 000000, "explanation": "...", "sources": "..."},
-    {"year": x, "value": 000000, "explanation": "...", "sources": "..."},
-    {"year": x, "value": 000000, "explanation": "...", "sources": "..."},
-    {"year": x, "value": 000000, "explanation": "...", "sources": "..."}
-  ]
-}`;
+    const result = await session.prompt(prompt);
 
-  try {
-    const result = await fetchOpenAI(openaiEndpoint, openaiApiKey, prompt);
-    const prediction = JSON.parse(result.choices[0].message.content);
+    console.log('AI response:');
+    console.log(result);
+
+    // Convert CSV to array of objects
+    const lines = result.trim().split('\n');
+    const formattedResult = {
+      value_prediction: lines
+        .slice(2, 7)
+        .map(line => {
+          const values = line.split(',').map((value, index) => index === 2 ? value.replace(/,/g, '') : value);
+          console.log(values);
+          const price = values[1].replace(/[^0-9]/g, '').trim();
+          console.log(price);
+          return {
+            year: parseInt(values[0]),
+            value: price, 
+            explanation: values[2],
+            sources: values[3]
+          };
+        })
+    };
+
+    session.destroy();
+    
+    jsonResult = JSON.stringify(formattedResult);
+
+    // Parse the JSON response
+    const prediction = JSON.parse(jsonResult);
+
+    console.log(prediction);
+
     return prediction.value_prediction;
-  } catch (error) {
-    console.error('Error in predictFutureValues:', error);
-    return null;
-  }
+
 }
