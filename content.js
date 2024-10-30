@@ -5,64 +5,74 @@ async function extractPropertyInfo() {
     return null;
   }
 
-  try {
-    let jsonData = JSON.parse(scriptElement.textContent);
+  let jsonData = JSON.parse(scriptElement.textContent);
 
-    // Clean unnecessary data from response
-    jsonData = Object.fromEntries(
-      Object.entries(jsonData).filter(([key, value]) =>
-        (typeof value === 'string') &&
-        (!/^\d+$/.test(value) || /^\d{4}$/.test(value))
-      )
-    );
+  // Clean unnecessary data from response
+  jsonData = Object.fromEntries(
+    Object.entries(jsonData).filter(([_, value]) =>
+      (typeof value === 'string') &&
+      (!/^\d+$/.test(value) || /^\d{4}$/.test(value))
+    )
+  );
 
-    const openaiApiKey = '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'; // Replace with your actual API key
-    const openaiEndpoint = 'https://api.openai.com/v1/chat/completions';
+  // Get the API key from storage
+  const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
+  
+  if (!geminiApiKey) {
+    console.error('Gemini API key not set');
+    return null;
+  }
 
-    const prompt = `Je bent een vastgoed expert die informatie van een woning moet analyseren.
+  const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
 
-Dit is een verzoek om de volgende informatie uit JSON-data te halen:
-1. Titel (combinatie van straat, huisnummer, postcode en stad)
-2. Prijs
-3. Kenmerken (lijst met alle faciliteiten zoals: tuin, garage, sauna, laadpaal, parkeerplek, warmtepomp, zolder en schuur.
-4. Beschrijving (Geef een samengevatte beschrijving van het pand, bij voorkeur onder 150 woorden)
-5. Details (vermeld indien beschikbaar: bouwjaar, soort woonhuis/huis, woonoppervlakte, bergruimte, aantal kamers, badkamer, woonlagen, badkamervoorzieningen, energielabel, verwarming, isolatie, gemeubileerd, gestoffeerd, permanente bewoning toegestaan, sauna, hottub)
-6. Geef een indicatie of de prijs van dit pand 'hoog', 'laag' of 'gemiddeld' is voor een investeerder. Baseer dit op
-het verschil tussen de vraagprijs en de woz waarde van het vorige jaar (het is nu ${new Date().getFullYear()}). Indien de 'Gem. vraagprijs / m²' beschikbaar is in de onderstaande JSON informatie, neem die ook mee in je conclusie. Hoe kleiner het verschil, hoe eerlijker de prijs.
-7. Geef een toelichting op je conclusie betreft de prijs. De conclusie is gericht op investeerders. 
-Onderbouw het met minimaal 3 argumenten, je verteld het aan een potentiële investeerder die met winst dit pand wil verhuren of verkopen.
-8. Noem ook 5 voor- en nadelen (als die er zijn) voor investeerders, zet de voor- en nadelen in een bullet point lijst met groene vinkjes en rode kruisjes. 
+  const prompt = `You are a real estate expert who needs to analyze property information.
 
-Houd je conclusies consistent en duidelijk voor investeerders voor alle punten bovengenoemde punten. Ga in op details.
+This is a request to extract the following information from JSON data:
+1. Title (combination of street, house number, postal code and city)
+2. Price
+3. Features (list of all amenities such as: garden, garage, sauna, charging station, parking space, heat pump, attic and shed)
+4. Description (Give a summarized description of the property, preferably under 150 words)
+5. Details (mention if available: year of construction, type of house/residence, living area, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)
+6. Give an indication whether the price of this property is 'high', 'low' or 'average' for an investor. Base this on
+the difference between the asking price and the WOZ value of the previous year (it is now ${new Date().getFullYear()}). If the 'Avg. asking price / m²' is available in the JSON information below, include that in your conclusion as well. The smaller the difference, the fairer the price.
+7. Provide an explanation of your conclusion regarding the price. The conclusion is aimed at investors.
+Support it with at least 3 arguments, you are telling it to a potential investor who wants to rent or sell this property for profit.
+8. Also list 5 advantages and disadvantages (if any) for investors, put the pros and cons in a bullet point list with green checkmarks and red crosses.
 
-Retourneer in JSON-formaat met de keys 'title', 'price', 'features', 'description', 'details', 'price_comparison', 'price_comparison_explanation', 'pros', 'cons'.
+Keep your conclusions consistent and clear for investors for all points mentioned above. Go into details.
+
+Return in JSON format with the keys 'title', 'price', 'features', 'description', 'details', 'price_comparison', 'price_comparison_explanation', 'pros', 'cons'.
 ${JSON.stringify(jsonData)}
 `;
 
-    const result = await fetchOpenAI(openaiEndpoint, openaiApiKey, prompt);
+  // console.log('Prompt:');
+  // console.log(prompt);
 
-    const extractedInfo = JSON.parse(result.choices[0].message.content);
+  const result = await fetchGemini(geminiEndpoint, geminiApiKey, prompt);
 
-    return {
-      title: extractedInfo.title ?? '',
-      price: extractedInfo.price ?? 0,
-      features: extractedInfo.features ?? [],
-      description: extractedInfo.description ?? '',
-      details: extractedInfo.details ?? {},
-      price_comparison: extractedInfo.price_comparison ?? '',
-      price_comparison_explanation: extractedInfo.price_comparison_explanation ?? '',
-      pros: extractedInfo.pros ?? [],
-      cons: extractedInfo.cons ?? []
-    };
-  } catch (error) {
-    console.error('Error in extractPropertyInfo:', error);
-    return null;
-  }
+  // Parse Gemini response
+  const extractedInfo = JSON.parse(result.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
+
+  console.log('Extracted info:');
+  console.log(extractedInfo);
+
+  return {
+    title: extractedInfo.title ?? '',
+    price: extractedInfo.price ?? 0,
+    features: extractedInfo.features ?? [],
+    description: extractedInfo.description ?? '',
+    details: extractedInfo.details ?? {},
+    price_comparison: extractedInfo.price_comparison ?? '',
+    price_comparison_explanation: extractedInfo.price_comparison_explanation ?? '',
+    pros: extractedInfo.pros ?? [],
+    cons: extractedInfo.cons ?? []
+  };
+
 }
 
 async function createSummary(propertyInfo) {
   if (!propertyInfo) {
-    return '<p>Kan de woninginformatie niet extraheren</p>';
+    return '<p>Unable to extract property information</p>';
   }
 
   const { title, price, features, description, details, price_comparison, price_comparison_explanation, pros, cons } = propertyInfo;
@@ -75,25 +85,25 @@ async function createSummary(propertyInfo) {
   summary += '<div class="ai-summary-content-block">';
   const propertyAddress = title.split(',')[0].split('-')[0].trim();
   try {
-    // Waarde voorspellingen voor de komende 5 jaren
+    // Value predictions for the next 5 years
     const wozWaarden = await getWozValues(propertyAddress);
-    const valuePrediction = await predictFutureValues(wozWaarden, propertyInfo);
+    const valuePrediction = await predictFutureValues(wozWaarden);
     if (valuePrediction) {
       summary += createValuePredictionSection(valuePrediction);
     }
 
-    // WOZ waarden
+    // WOZ values (Property Valuation Act values in English)
     summary += createWozSection(wozWaarden);
   } catch (error) {
     console.error('Error retrieving WOZ values:', error);
-    summary += "<p>WOZ waarden en waarde voorspellingen niet beschikbaar</p>";
+    summary += "<p>WOZ values and value predictions not available.</p>";
   }
   summary += '</div>';
 
   summary += createProsConsSection(pros, cons);
 
-  summary += createListSection('Kenmerken', features, '✓');
-  summary += createContentBlock('Beschrijving', description);
+  summary += createListSection('Features', features, '✓');
+  summary += createContentBlock('Description', description);
   summary += createDetailsSection(details);
 
   return summary;
@@ -101,7 +111,7 @@ async function createSummary(propertyInfo) {
 
 function createListSection(title, items, icon) {
   if (!Array.isArray(items) || items.length === 0) {
-    return `<p>Geen ${title.toLowerCase()} beschikbaar</p>`;
+    return `<p>No ${title.toLowerCase()} available</p>`;
   }
 
   let section = `<p style="margin-top: 10px;"><strong>${title}:</strong></p><ul>`;
@@ -118,7 +128,7 @@ function createContentBlock(title, content) {
 
 function createDetailsSection(details) {
   if (Object.keys(details).length === 0) {
-    return "<p>Geen details beschikbaar</p>";
+    return "<p>No details available</p>";
   }
 
   let section = "<p><strong>Details:</strong></p>";
@@ -131,14 +141,14 @@ function createDetailsSection(details) {
 function createPriceComparisonSection(comparison, explanation) {
   let label = '';
   let color = '';
-  if (comparison.toLowerCase().includes('hoog')) {
-    label = 'Hoog';
+  if (comparison.toLowerCase().includes('high')) {
+    label = 'High';
     color = 'red';
-  } else if (comparison.toLowerCase().includes('laag')) {
-    label = 'Laag';
+  } else if (comparison.toLowerCase().includes('low')) {
+    label = 'Low';
     color = 'green';
-  } else if (comparison.toLowerCase().includes('gemiddeld')) {
-    label = 'Gemiddeld';
+  } else if (comparison.toLowerCase().includes('average')) {
+    label = 'Average';
     color = 'orange';
   }
 
@@ -158,7 +168,7 @@ function createProsConsSection(pros, cons) {
   }
 
   let section = "<div class='ai-summary-content-block'>";
-  section += "<p><strong>Pro's en Con's:</strong></p>";
+  section += "<p><strong>Pro's and Con's:</strong></p>";
   section += '<ul>';
   pros.forEach(pro => section += `<li><span style="color: #4CAF50;">✓</span> ${pro}</li>`);
   cons.forEach(con => section += `<li><span style="color: red;">X</span> ${con}</li>`);
@@ -216,7 +226,7 @@ function createWozSection(wozWaarden) {
 }
 
 function createValuePredictionSection(valuePrediction) {
-  let section = "<p style='margin-top: 20px;'><strong>Waarde voorspelling voor de komende 5 jaren:</strong></p>";
+  let section = "<p style='margin-top: 20px;'><strong>Value prediction for the next 5 years:</strong></p>";
   section += "<ul>";
   let previousValue = valuePrediction[0].value;
   valuePrediction.forEach((prediction, index) => {
@@ -230,11 +240,11 @@ function createValuePredictionSection(valuePrediction) {
     }
     previousValue = prediction.value;
     section += `<li>
-      <strong>${prediction.year}:</strong> <span style="${valueColor}">€${prediction.value.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+      <strong>${prediction.year}:</strong> <span style="${valueColor}">€${prediction.value.toLocaleString('en-EN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
       <span class="info-icon" data-toggle="tooltip" data-placement="right" title="Klik voor meer informatie">ℹ️</span>
       <div class="prediction-details" id="prediction-${index}" style="display: none;">
-        <em>Verklaring: ${prediction.explanation}</em>
-        <br><strong>Bronnen:</strong> ${prediction.sources}
+        <em>Explanation: ${prediction.explanation}</em>
+        <br><strong>Sources:</strong> ${prediction.sources}
       </div>
     </li>`;
   });
@@ -254,24 +264,30 @@ function createValuePredictionSection(valuePrediction) {
   return section;
 }
 
-async function fetchOpenAI(endpoint, apiKey, prompt) {
-  const response = await fetch(endpoint, {
+async function fetchGemini(endpoint, apiKey, prompt) {
+  const response = await fetch(`${endpoint}?key=${apiKey}`, {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`
+      'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1
+      contents: [{
+        parts: [{
+          text: prompt
+        }]
+      }],
+      generationConfig: {
+        temperature: 0.1,
+        topK: 1,
+        topP: 1
+      }
     })
   });
 
   const result = await response.json();
 
-  if (!result.choices || result.choices.length === 0) {
-    throw new Error('No choices returned from OpenAI API');
+  if (!result.candidates || result.candidates.length === 0) {
+    throw new Error('No response from Gemini API');
   }
 
   return result;
@@ -282,10 +298,10 @@ document.addEventListener('click', function (event) {
     const allWozWaarden = document.getElementById('all-woz-waarden');
     if (allWozWaarden.style.display === 'none') {
       allWozWaarden.style.display = 'block';
-      event.target.textContent = 'Minder weergeven';
+      event.target.textContent = 'Show less';
     } else {
       allWozWaarden.style.display = 'none';
-      event.target.textContent = 'Meer weergeven';
+      event.target.textContent = 'Show more';
     }
   }
 });
@@ -397,7 +413,7 @@ function injectSidePanel() {
   const loader = document.createElement('div');
   loader.id = 'ai-summary-loader';
   loader.innerHTML = `
-    <p>Samenvatting genereren...</p>
+    <p id="loader-message">Extracting information...</p>
     <div class="progress-bar">
       <div class="progress-bar-inner"></div>
     </div>
@@ -406,7 +422,7 @@ function injectSidePanel() {
 
   const toggleButton = document.createElement('button');
   toggleButton.id = 'ai-summary-toggle';
-  toggleButton.textContent = 'Samenvatting';
+  toggleButton.textContent = 'Summary';
   toggleButton.style.cssText = `
     position: fixed;
     top: 70%;
@@ -434,6 +450,10 @@ async function retrievePropertyInfo() {
   const propertyInfo = await extractPropertyInfo();
   if (propertyInfo) {
     console.log('Creating summary...');
+    const loaderMessage = document.getElementById('loader-message');
+    if (loaderMessage) {
+      loaderMessage.textContent = 'Creating summary now';
+    }
     const summary = await createSummary(propertyInfo);
 
     const summaryContent = document.getElementById('ai-summary-content');
@@ -464,10 +484,10 @@ function togglePanel() {
 
   if (panel.style.right === '0px') {
     panel.style.right = '-300px';
-    toggleButton.textContent = 'Samenvatting';
+    toggleButton.textContent = 'Summary';
   } else {
     panel.style.right = '0px';
-    toggleButton.textContent = 'Verberg';
+    toggleButton.textContent = 'Hide';
 
     if (!summaryRetrieved) {
       toggleLoader(true);
@@ -491,7 +511,7 @@ async function init() {
   injectSidePanel();
 }
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((request, _, sendResponse) => {
   if (request.action === 'togglePanel') {
     togglePanel();
     sendResponse({ status: 'Panel toggled' });
@@ -519,7 +539,7 @@ async function getWozValues(address) {
   const nummeraanduidingId = lookupData.response.docs[0]?.nummeraanduiding_id;
 
   if (!nummeraanduidingId) {
-    throw new Error('Nummeraanduiding ID not found');
+    throw new Error("'Nummeraanduiding ID' not found");
   }
 
   const wozResponse = await fetch(`https://api.kadaster.nl/lvwoz/wozwaardeloket-api/v1/wozwaarde/nummeraanduiding/${nummeraanduidingId}`);
@@ -533,13 +553,13 @@ async function getWozValues(address) {
   return wozWaarden;
 }
 
-async function predictFutureValues(wozWaarden, propertyInfo) {
+async function predictFutureValues(wozWaarden) {
 
-    const session = await ai.languageModel.create({
-      systemPrompt: "You are a real estate expert who predicts the future value of a property and returns it in CSV format."
-    });
+  const session = await ai.languageModel.create({
+    systemPrompt: "You are a real estate expert who predicts the future value of a property and returns it in CSV format."
+  });
 
-    const prompt = `
+  const prompt = `
 Make a prediction of the value evaluation for the next 5 years. You can base this on the WOZ values, previous years, current market, economic factors, etc. If it concerns a vacation home, include tourism factors. Provide the value for each year (the next 5 years).
 
 Given the following WOZ values from previous years:
@@ -555,41 +575,41 @@ Always return the predictions in this format:
 year,value,explanation,sources
 `;
 
-    // console.log(prompt);
+  // console.log(prompt);
 
-    const result = await session.prompt(prompt);
+  const result = await session.prompt(prompt);
 
-    console.log('AI response:');
-    console.log(result);
+  console.log('AI response:');
+  console.log(result);
 
-    // Convert CSV to array of objects
-    const lines = result.trim().split('\n');
-    const formattedResult = {
-      value_prediction: lines
-        .slice(2, 7)
-        .map(line => {
-          const values = line.split(',').map((value, index) => index === 2 ? value.replace(/,/g, '') : value);
-          console.log(values);
-          const price = values[1].replace(/[^0-9]/g, '').trim();
-          console.log(price);
-          return {
-            year: parseInt(values[0]),
-            value: price, 
-            explanation: values[2],
-            sources: values[3]
-          };
-        })
-    };
+  // Convert CSV to array of objects
+  const lines = result.trim().split('\n');
+  const formattedResult = {
+    value_prediction: lines
+      .slice(2, 7)
+      .map(line => {
+        const values = line.split(',').map((value, index) => index === 2 ? value.replace(/,/g, '') : value);
+        console.log(values);
+        const price = values[1].replace(/[^0-9]/g, '').trim();
+        console.log(price);
+        return {
+          year: parseInt(values[0]),
+          value: price,
+          explanation: values[2],
+          sources: values[3]
+        };
+      })
+  };
 
-    session.destroy();
-    
-    jsonResult = JSON.stringify(formattedResult);
+  session.destroy();
 
-    // Parse the JSON response
-    const prediction = JSON.parse(jsonResult);
+  jsonResult = JSON.stringify(formattedResult);
 
-    console.log(prediction);
+  // Parse the JSON response
+  const prediction = JSON.parse(jsonResult);
 
-    return prediction.value_prediction;
+  console.log(prediction);
+
+  return prediction.value_prediction;
 
 }
