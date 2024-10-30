@@ -17,15 +17,24 @@ async function extractPropertyInfo() {
 
   // Get the API key from storage
   const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
-  
+
   if (!geminiApiKey) {
     console.error('Gemini API key not set');
     return null;
   }
 
   const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+  const address = jsonData[10];
 
-  const prompt = `You are a real estate expert who needs to analyze property information.
+  // Get neighborhood stats before creating the prompt
+  const neighborhoodStats = await getNeighborhoodStats(address);
+
+  if (neighborhoodStats) {
+    const averagePurchasePrice = neighborhoodStats.averagePrice;
+    const neighborhood = neighborhoodStats.neighborhood;
+    const municipality = neighborhoodStats.municipality;
+
+    const prompt = `You are a real estate expert who needs to analyze property information.
 
 This is a request to extract the following information from JSON data:
 1. Title (combination of street, house number, postal code and city)
@@ -33,8 +42,11 @@ This is a request to extract the following information from JSON data:
 3. Features (list of all amenities such as: garden, garage, sauna, charging station, parking space, heat pump, attic and shed)
 4. Description (Give a summarized description of the property, preferably under 150 words)
 5. Details (mention if available: year of construction, type of house/residence, living area, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)
-6. Give an indication whether the price of this property is 'high', 'low' or 'average' for an investor. Base this on
-the difference between the asking price and the WOZ value of the previous year (it is now ${new Date().getFullYear()}). If the 'Avg. asking price / m²' is available in the JSON information below, include that in your conclusion as well. The smaller the difference, the fairer the price.
+6. Give an indication whether the price of this property is 'high', 'low' or 'average' for an investor. 
+Base it on the '${neighborhood}, ${municipality}' average purchase price of ${averagePurchasePrice} (the smaller the difference, the fairer the price).
+Base it on: if it's located in a desirable neighborhood, close to amenities such as schools, shops and public transport, it can be attractive to potential tenants or buyers.
+Base it on: if the property value is expected to increase due to developments in the area, such as new infrastructure projects or redevelopment plans.
+Base it on: Rental income. If the property has high rental potential and can provide a good return on investment.
 7. Provide an explanation of your conclusion regarding the price. The conclusion is aimed at investors.
 Support it with at least 3 arguments, you are telling it to a potential investor who wants to rent or sell this property for profit.
 8. Also list 5 advantages and disadvantages (if any) for investors, put the pros and cons in a bullet point list with green checkmarks and red crosses.
@@ -45,29 +57,24 @@ Return in JSON format with the keys 'title', 'price', 'features', 'description',
 ${JSON.stringify(jsonData)}
 `;
 
-  // console.log('Prompt:');
-  // console.log(prompt);
+    // Fetch Gemini response
+    const result = await fetchGemini(geminiEndpoint, geminiApiKey, prompt);
 
-  const result = await fetchGemini(geminiEndpoint, geminiApiKey, prompt);
+    // Parse Gemini response
+    const extractedInfo = JSON.parse(result.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
 
-  // Parse Gemini response
-  const extractedInfo = JSON.parse(result.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
-
-  console.log('Extracted info:');
-  console.log(extractedInfo);
-
-  return {
-    title: extractedInfo.title ?? '',
-    price: extractedInfo.price ?? 0,
-    features: extractedInfo.features ?? [],
-    description: extractedInfo.description ?? '',
-    details: extractedInfo.details ?? {},
-    price_comparison: extractedInfo.price_comparison ?? '',
-    price_comparison_explanation: extractedInfo.price_comparison_explanation ?? '',
-    pros: extractedInfo.pros ?? [],
-    cons: extractedInfo.cons ?? []
-  };
-
+    return {
+      title: extractedInfo.title ?? '',
+      price: extractedInfo.price ?? 0,
+      features: extractedInfo.features ?? [],
+      description: extractedInfo.description ?? '',
+      details: extractedInfo.details ?? {},
+      price_comparison: extractedInfo.price_comparison ?? '',
+      price_comparison_explanation: extractedInfo.price_comparison_explanation ?? '',
+      pros: extractedInfo.pros ?? [],
+      cons: extractedInfo.cons ?? []
+    };
+  }
 }
 
 async function createSummary(propertyInfo) {
@@ -83,7 +90,7 @@ async function createSummary(propertyInfo) {
   summary += createPriceComparisonSection(price_comparison, price_comparison_explanation);
 
   summary += '<div class="ai-summary-content-block">';
-  const propertyAddress = title.split(',')[0].split('-')[0].trim();
+  const propertyAddress = title;
   try {
     // Value predictions for the next 5 years
     const wozWaarden = await getWozValues(propertyAddress);
@@ -178,7 +185,7 @@ function createProsConsSection(pros, cons) {
 }
 
 function createWozSection(wozWaarden) {
-  let section = "<p style='margin-top: 20px;'><strong>WOZ waarden:</strong></p>";
+  let section = "<p style='margin-top: 20px;'><strong>WOZ values:</strong></p>";
   section += `<ul id="woz-list">`;
 
   const sortedWozWaarden = wozWaarden.sort((a, b) => new Date(b.peildatum) - new Date(a.peildatum));
@@ -278,7 +285,7 @@ async function fetchGemini(endpoint, apiKey, prompt) {
       }],
       generationConfig: {
         temperature: 0.1,
-        topK: 1,
+        topK: 3,
         topP: 1
       }
     })
@@ -348,16 +355,17 @@ function injectStyles() {
     }
     
     #ai-summary-loader {
-      display: none;
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      text-align: center;
+      position: relative;
+      padding: 20px;
+      min-height: 200px;
+      min-width: 250px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     
     .progress-bar {
-      width: 200px;
+      width: 100%;
       height: 4px;
       background-color: #f3f3f3;
       border-radius: 2px;
@@ -384,6 +392,70 @@ function injectStyles() {
         transform:  translateX(100%) scaleX(0.5);
       }
     }
+
+    .placeholder {
+      background: #eee;
+      background: linear-gradient(110deg, #ececec 8%, #f5f5f5 18%, #ececec 33%);
+      border-radius: 5px;
+      background-size: 200% 100%;
+      animation: 1.5s shine linear infinite;
+      margin-bottom: 10px;
+    }
+
+    .placeholder-text {
+      height: 14px;
+      margin-bottom: 10px;
+      width: 100%;
+    }
+
+    .placeholder-title {
+      height: 24px;
+      width: 80%;
+      margin-bottom: 20px;
+    }
+
+    .placeholder-price {
+      height: 20px;
+      width: 40%;
+      margin-bottom: 30px;
+    }
+
+    .placeholder-block {
+      height: 80px;
+      margin-bottom: 20px;
+      width: 100%;
+    }
+
+    @keyframes shine {
+      to {
+        background-position-x: -200%;
+      }
+    }
+
+    #ai-summary-content {
+      display: none;
+    }
+
+    #loader-message {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      font-weight: 500;
+      color: #4CAF50;
+      background: white;
+      padding: 10px 20px;
+      border-radius: 4px;
+      z-index: 2;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      width: 80%;
+      margin: 0 auto;
+    }
+
+    .placeholder-container {
+      opacity: 0.3;  /* Make placeholders more subtle */
+    }
   `;
   document.head.appendChild(style);
 }
@@ -408,14 +480,39 @@ function injectSidePanel() {
 
   const summaryContent = document.createElement('div');
   summaryContent.id = 'ai-summary-content';
+  summaryContent.style.display = 'none';
   panel.appendChild(summaryContent);
 
   const loader = document.createElement('div');
   loader.id = 'ai-summary-loader';
   loader.innerHTML = `
-    <p id="loader-message">Extracting information...</p>
-    <div class="progress-bar">
-      <div class="progress-bar-inner"></div>
+    <div id="loader-message">
+      <p id="loader-message-text">Extracting information...</p>
+      <div class="progress-bar">
+        <div class="progress-bar-inner"></div>
+      </div>
+    </div>
+    <div class="placeholder-container">
+      <div class="placeholder placeholder-title"></div>
+      <div class="placeholder placeholder-price"></div>
+
+      <div class="placeholder placeholder-block"></div>
+      <div class="placeholder placeholder-title"></div>
+      <div class="placeholder placeholder-text"></div>
+      <div class="placeholder placeholder-text"></div>
+      <div class="placeholder placeholder-text"></div>
+
+      <div class="placeholder placeholder-block"></div>
+      <div class="placeholder placeholder-title"></div>
+      <div class="placeholder placeholder-text"></div>
+      <div class="placeholder placeholder-text"></div>
+      <div class="placeholder placeholder-text"></div>
+
+      <div class="placeholder placeholder-block"></div>
+      <div class="placeholder placeholder-title"></div>
+      <div class="placeholder placeholder-text"></div>
+      <div class="placeholder placeholder-text"></div>
+      <div class="placeholder placeholder-text"></div>
     </div>
   `;
   panel.appendChild(loader);
@@ -450,9 +547,9 @@ async function retrievePropertyInfo() {
   const propertyInfo = await extractPropertyInfo();
   if (propertyInfo) {
     console.log('Creating summary...');
-    const loaderMessage = document.getElementById('loader-message');
+    const loaderMessage = document.getElementById('loader-message-text');
     if (loaderMessage) {
-      loaderMessage.textContent = 'Creating summary now';
+      loaderMessage.textContent = 'Creating summary...';
     }
     const summary = await createSummary(propertyInfo);
 
@@ -526,9 +623,41 @@ if (document.readyState === 'loading') {
 }
 
 async function getWozValues(address) {
-  const suggestResponse = await fetch(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=3`);
+  const suggestResponse = await fetch(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1000`);
   const suggestData = await suggestResponse.json();
-  const addressId = suggestData.response.docs[0]?.id;
+  let addressId = null;
+
+  console.log('Suggest data:', suggestData);
+  console.log('Address:', address);
+  
+  // Extract all numbers from the search address
+  const searchNumbers = address.match(/\d+/g) || [];
+
+  console.log('Search numbers:', searchNumbers);
+  
+  // Search through the suggested addresses
+  for (const doc of suggestData.response.docs) {
+    const weergavenaam = doc.weergavenaam;
+    
+    // Extract all numbers from weergavenaam
+    const docNumbers = weergavenaam.match(/\d+/g) || [];
+    
+    // Check if all search numbers are present in doc numbers
+    const allNumbersMatch = searchNumbers.every(num => 
+      docNumbers.includes(num)
+    );
+    
+    if (allNumbersMatch) {
+      addressId = doc.id;
+      break;
+    }
+
+  }
+
+  // Fallback to first result if no match found
+  if (!addressId && suggestData.response.docs.length > 0) {
+    addressId = suggestData.response.docs[0].id;
+  }
 
   if (!addressId) {
     throw new Error('Address ID not found');
@@ -556,6 +685,9 @@ async function getWozValues(address) {
 async function predictFutureValues(wozWaarden) {
 
   const session = await ai.languageModel.create({
+    temperature: 0.1,
+    topK: 3,
+    topP: 1,
     systemPrompt: "You are a real estate expert who predicts the future value of a property and returns it in CSV format."
   });
 
@@ -578,10 +710,6 @@ year,value,explanation,sources
   // console.log(prompt);
 
   const result = await session.prompt(prompt);
-
-  console.log('AI response:');
-  console.log(result);
-
   // Convert CSV to array of objects
   const lines = result.trim().split('\n');
   const formattedResult = {
@@ -589,9 +717,7 @@ year,value,explanation,sources
       .slice(2, 7)
       .map(line => {
         const values = line.split(',').map((value, index) => index === 2 ? value.replace(/,/g, '') : value);
-        console.log(values);
         const price = values[1].replace(/[^0-9]/g, '').trim();
-        console.log(price);
         return {
           year: parseInt(values[0]),
           value: price,
@@ -608,8 +734,49 @@ year,value,explanation,sources
   // Parse the JSON response
   const prediction = JSON.parse(jsonResult);
 
-  console.log(prediction);
-
   return prediction.value_prediction;
 
+}
+
+async function getNeighborhoodStats(address) {
+  // Get previous year since that's typically the most recent complete dataset
+  const previousYear = (new Date().getFullYear() - 1).toString() + 'JJ00';
+
+  // Get BAG id from PDOK
+  const suggestResponse = await fetch(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1`);
+  const suggestData = await suggestResponse.json();
+
+  if (!suggestData.response?.docs?.[0]?.id) {
+    console.error('Could not find BAG id for address:', address);
+    return null;
+  }
+
+  // Get detailed information including neighborhood code
+  const lookupResponse = await fetch(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/lookup?id=${suggestData.response.docs[0].id}`);
+  const lookupData = await lookupResponse.json();
+
+  if (!lookupData.response?.docs?.[0]?.buurtcode) {
+    console.error('Could not find neighborhood code');
+    return null;
+  }
+
+  const gemeenteCode = `GM${lookupData.response.docs[0].gemeentecode}`;
+
+  // Get neighborhood statistics from CBS (StatLine) for the previous year only (current year is not possible)
+  const statsResponse = await fetch(
+    `https://opendata.cbs.nl/ODataApi/odata/83625ENG/TypedDataSet?$filter=Regions eq '${gemeenteCode}' and Periods eq '${previousYear}'`
+  );
+  const statsData = await statsResponse.json();
+
+  if (!statsData.value?.[0]) {
+    console.error('Could not find CBS statistics for this neighborhood for year:', previousYear);
+    return null;
+  }
+
+  return {
+    averagePrice: statsData.value[0].AveragePurchasePrice_1,
+    neighborhood: lookupData.response.docs[0].buurtnaam,
+    municipality: lookupData.response.docs[0].gemeentenaam,
+    year: previousYear
+  };
 }
