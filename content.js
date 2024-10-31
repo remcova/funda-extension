@@ -23,48 +23,85 @@ async function extractPropertyInfo() {
     return null;
   }
 
-  const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent';
+  const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
   const address = jsonData[10];
+  const price = jsonData[26].replace(/[^\d]/g, '');
 
   // Get neighborhood stats before creating the prompt
   const neighborhoodStats = await getNeighborhoodStats(address);
 
   if (neighborhoodStats) {
-    const averagePurchasePrice = neighborhoodStats.averagePrice;
+    const avgPurchasePriceNeighborhood = neighborhoodStats.averagePrice;
+    const avgPricePerSqmNeighborhood = neighborhoodStats.pricePerSqm;
     const neighborhood = neighborhoodStats.neighborhood;
     const municipality = neighborhoodStats.municipality;
+
+    const propertyPricePerSqm = calculatePricePerSqm(450000, 100);
+
+    console.log(avgPricePerSqmNeighborhood);
+    console.log("Property price per sqm: €" + propertyPricePerSqm.value + " Average price per sqm in neighborhood: €" + avgPricePerSqmNeighborhood);
+
+    // make calculation that compares the property price per sqm to the average price per sqm in the neighborhood
+    const ratioPricePerSqm = propertyPricePerSqm.value / avgPricePerSqmNeighborhood;
 
     const prompt = `You are a real estate expert who needs to analyze property information.
 
 This is a request to extract the following information from JSON data:
-1. Title (combination of street, house number, postal code and city)
-2. Price
-3. Features (list of all amenities such as: garden, garage, sauna, charging station, parking space, heat pump, attic and shed)
-4. Description (Give a summarized description of the property, preferably under 150 words)
-5. Details (mention if available: year of construction, type of house/residence, living area, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)
-6. Give an indication whether the price of this property is 'high', 'low' or 'average' for an investor. 
-Base it on the '${neighborhood}, ${municipality}' average purchase price of ${averagePurchasePrice} (the smaller the difference, the fairer the price).
-Base it on: if it's located in a desirable neighborhood, close to amenities such as schools, shops and public transport, it can be attractive to potential tenants or buyers.
-Base it on: if the property value is expected to increase due to developments in the area, such as new infrastructure projects or redevelopment plans.
-Base it on: Rental income. If the property has high rental potential and can provide a good return on investment.
-7. Provide an explanation of your conclusion regarding the price. The conclusion is aimed at investors.
-Support it with at least 3 arguments, you are telling it to a potential investor who wants to rent or sell this property for profit.
-8. Also list 5 advantages and disadvantages (if any) for investors, put the pros and cons in a bullet point list with green checkmarks and red crosses.
+1. Title: combination of street, house number, postal code and city
+2. Price: asking price
+3. Features: List of all amenities such as: garden, garage, sauna, hot tub, charging station, parking space, heat pump, attic and shed)
+4. Description: Give a summarized description of the property, preferably under 150 words)
+5. Details: Mention if available: year of construction, type of house/residence, living area, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)
+6. Price comparison: Analyze whether the asking price (€${price}) represents good value for an investor by considering:
+   - The ratio between the property price per sqm (${propertyPricePerSqm.value}) and the average price per sqm in ${neighborhood}, ${municipality} (${avgPricePerSqmNeighborhood}), which is ${ratioPricePerSqm}.
+   - If the property is a non-recreational property, compare the purchase price (${price}) to the average purchase price in ${neighborhood}, ${municipality} (${avgPurchasePriceNeighborhood}).
+   - Evaluate the location's desirability in terms of:
+     * Proximity to amenities and services
+     * Neighborhood quality and development potential
+     * Local market trends in ${municipality}
+   - Assess the investment potential:
+     * Expected rental income and occupancy rates
+     * Potential for value appreciation
+     * Additional revenue from features like sauna/hot tub
+   Based on this analysis, classify the price as 'high', 'low' or 'average' from an investor's perspective.
+7. Price comparison explanation: Based on your price analysis from point 6, explain your conclusion to the reader:
+   - Start with "The asking price €${price} is X because: [reasons]"
+   - Justify why you classified the price as 'high', 'low', or 'average'
+   - Support your assessment with the key factors from your analysis:
+     * The price per square meter comparison
+     * The location and amenity evaluation
+     * The investment potential findings
+   Write this explanation in clear terms for a potential investor considering this property.
+8. Pros and cons: Also list 5 advantages and disadvantages (if any) for investors, put the pros and cons in a bullet point list.
 
-Keep your conclusions consistent and clear for investors for all points mentioned above. Go into details.
+You are now a JSON validator and formatter. When processing real estate data, please follow this format:
+{
+  title: string,
+  price: number,
+  features: array of strings,
+  description: string,
+  details: object,
+  price_comparison: string,
+  price_comparison_explanation: string,
+  pros: array of strings,
+  cons: array of strings
+}
 
-Return in JSON format with the keys 'title', 'price', 'features', 'description', 'details', 'price_comparison', 'price_comparison_explanation', 'pros', 'cons'.
+Please convert the following real estate data into the valid JSON format as shown as above.
 ${JSON.stringify(jsonData)}
 `;
 
     // Fetch Gemini response
     const result = await fetchGemini(geminiEndpoint, geminiApiKey, prompt);
 
+    console.log('GEMINI RESPONSE:', result);
+
     // Parse Gemini response
     const extractedInfo = JSON.parse(result.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
 
     return {
       title: extractedInfo.title ?? '',
+      address: address ?? '',
       price: extractedInfo.price ?? 0,
       features: extractedInfo.features ?? [],
       description: extractedInfo.description ?? '',
@@ -82,33 +119,36 @@ async function createSummary(propertyInfo) {
     return '<p>Unable to extract property information</p>';
   }
 
-  const { title, price, features, description, details, price_comparison, price_comparison_explanation, pros, cons } = propertyInfo;
+  const { title, address, price, features, description, details, price_comparison, price_comparison_explanation, pros, cons } = propertyInfo;
 
+  // Initialize variables for WOZ and predictions
+  let wozWaarden = null;
+  let valuePrediction = null;
+
+  // Fetch WOZ values and predictions first
+  wozWaarden = await getWozValues(address);
+  if (wozWaarden) {
+    valuePrediction = await predictFutureValues(wozWaarden);
+  }
+
+
+  // Build summary HTML after data is fetched
   let summary = `<h1>${title}</h1>`;
   summary += `<h3>${price}</h3>`;
-
   summary += createPriceComparisonSection(price_comparison, price_comparison_explanation);
 
   summary += '<div class="ai-summary-content-block">';
-  const propertyAddress = title;
-  try {
-    // Value predictions for the next 5 years
-    const wozWaarden = await getWozValues(propertyAddress);
-    const valuePrediction = await predictFutureValues(wozWaarden);
-    if (valuePrediction) {
-      summary += createValuePredictionSection(valuePrediction);
-    }
 
-    // WOZ values (Property Valuation Act values in English)
+  // Add WOZ and prediction sections only if data is available
+  if (wozWaarden && valuePrediction) {
+    summary += createValuePredictionSection(valuePrediction);
     summary += createWozSection(wozWaarden);
-  } catch (error) {
-    console.error('Error retrieving WOZ values:', error);
+  } else {
     summary += "<p>WOZ values and value predictions not available.</p>";
   }
   summary += '</div>';
 
   summary += createProsConsSection(pros, cons);
-
   summary += createListSection('Features', features, '✓');
   summary += createContentBlock('Description', description);
   summary += createDetailsSection(details);
@@ -140,7 +180,7 @@ function createDetailsSection(details) {
 
   let section = "<p><strong>Details:</strong></p>";
   for (const [key, value] of Object.entries(details)) {
-    section += `<p><strong>${key}:</strong> ${value}</p>`;
+    section += `<p><strong>${key}:</strong> ${value ?? 'N/A'}</p>`;
   }
   return section;
 }
@@ -177,8 +217,8 @@ function createProsConsSection(pros, cons) {
   let section = "<div class='ai-summary-content-block'>";
   section += "<p><strong>Pro's and Con's:</strong></p>";
   section += '<ul>';
-  pros.forEach(pro => section += `<li><span style="color: #4CAF50;">✓</span> ${pro}</li>`);
-  cons.forEach(con => section += `<li><span style="color: red;">X</span> ${con}</li>`);
+  pros.forEach(pro => section += `<li>✅ ${pro}</li>`);
+  cons.forEach(con => section += `<li>❌ ${con}</li>`);
   section += '</ul>';
   section += '</div>';
   return section;
@@ -251,7 +291,6 @@ function createValuePredictionSection(valuePrediction) {
       <span class="info-icon" data-toggle="tooltip" data-placement="right" title="Klik voor meer informatie">ℹ️</span>
       <div class="prediction-details" id="prediction-${index}" style="display: none;">
         <em>Explanation: ${prediction.explanation}</em>
-        <br><strong>Sources:</strong> ${prediction.sources}
       </div>
     </li>`;
   });
@@ -284,9 +323,9 @@ async function fetchGemini(endpoint, apiKey, prompt) {
         }]
       }],
       generationConfig: {
-        temperature: 0.1,
-        topK: 3,
-        topP: 1
+        temperature: 0.05,
+        topP: 0.8,
+        topK: 1,
       }
     })
   });
@@ -551,6 +590,8 @@ async function retrievePropertyInfo() {
     if (loaderMessage) {
       loaderMessage.textContent = 'Creating summary...';
     }
+
+    console.log('PROPERTY INFO:', propertyInfo);
     const summary = await createSummary(propertyInfo);
 
     const summaryContent = document.getElementById('ai-summary-content');
@@ -627,26 +668,26 @@ async function getWozValues(address) {
   const suggestData = await suggestResponse.json();
   let addressId = null;
 
+  console.log(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1000`);
+
   console.log('Suggest data:', suggestData);
   console.log('Address:', address);
-  
+
   // Extract all numbers from the search address
   const searchNumbers = address.match(/\d+/g) || [];
 
-  console.log('Search numbers:', searchNumbers);
-  
   // Search through the suggested addresses
   for (const doc of suggestData.response.docs) {
     const weergavenaam = doc.weergavenaam;
-    
+
     // Extract all numbers from weergavenaam
     const docNumbers = weergavenaam.match(/\d+/g) || [];
-    
+
     // Check if all search numbers are present in doc numbers
-    const allNumbersMatch = searchNumbers.every(num => 
+    const allNumbersMatch = searchNumbers.every(num =>
       docNumbers.includes(num)
     );
-    
+
     if (allNumbersMatch) {
       addressId = doc.id;
       break;
@@ -687,7 +728,6 @@ async function predictFutureValues(wozWaarden) {
   const session = await ai.languageModel.create({
     temperature: 0.1,
     topK: 3,
-    topP: 1,
     systemPrompt: "You are a real estate expert who predicts the future value of a property and returns it in CSV format."
   });
 
@@ -698,18 +738,16 @@ Given the following WOZ values from previous years:
 ${wozWaarden.map(woz => `WOZ waarde ${woz.peildatum}: €${woz.vastgesteldeWaarde}`).join('\n')}
 
 For each annual prediction, provide:
-1. A brief explanation of why the value increases, decreases or remains stable.
-2. List the sources or data on which you base your conclusion. These could include economic reports, market trends, or specific news articles. Name the sources specifically (websites, reports, etc.).
+1. A brief explanation of why the value increases, decreases or remains stable compared to the previous year. Name at least 1-2 resources that back your conclusion.
 
 The current year is ${new Date().getFullYear()}. Start the prediction from next year.
 
 Always return the predictions in this format:
-year,value,explanation,sources
+year,value,explanation
 `;
 
-  // console.log(prompt);
-
   const result = await session.prompt(prompt);
+
   // Convert CSV to array of objects
   const lines = result.trim().split('\n');
   const formattedResult = {
@@ -721,8 +759,7 @@ year,value,explanation,sources
         return {
           year: parseInt(values[0]),
           value: price,
-          explanation: values[2],
-          sources: values[3]
+          explanation: values[2]
         };
       })
   };
@@ -763,6 +800,7 @@ async function getNeighborhoodStats(address) {
   const gemeenteCode = `GM${lookupData.response.docs[0].gemeentecode}`;
 
   // Get neighborhood statistics from CBS (StatLine) for the previous year only (current year is not possible)
+  // G3625ENG = dataset code
   const statsResponse = await fetch(
     `https://opendata.cbs.nl/ODataApi/odata/83625ENG/TypedDataSet?$filter=Regions eq '${gemeenteCode}' and Periods eq '${previousYear}'`
   );
@@ -773,10 +811,55 @@ async function getNeighborhoodStats(address) {
     return null;
   }
 
+  const avgPurchasePrice = statsData.value[0].AveragePurchasePrice_1;
+  const pricePerSqm = await getTopPricePerSqm(gemeenteCode, avgPurchasePrice);
+
   return {
-    averagePrice: statsData.value[0].AveragePurchasePrice_1,
+    averagePrice: avgPurchasePrice,
+    pricePerSqm: pricePerSqm,
     neighborhood: lookupData.response.docs[0].buurtnaam,
     municipality: lookupData.response.docs[0].gemeentenaam,
     year: previousYear
+  };
+}
+
+async function getTopPricePerSqm(gemeenteCode, avgPurchasePrice) {
+  // Fetch data from the specific CBS endpoint
+  const currentYear = (new Date().getFullYear()).toString() + 'JJ00';
+  const response = await fetch(`https://opendata.cbs.nl/ODataApi/odata/82550NED/TypedDataSet?$top=1&$orderby=RegioS&$filter=RegioS eq '${gemeenteCode}' and Perioden eq '${currentYear}'`);
+  const data = await response.json();
+
+  if (!data.value?.[0]) {
+    return null;
+  }
+
+  const avgLivingArea = data.value[0].GemiddeldeOppervlakte_2;
+  const pricePerSqm = avgPurchasePrice / avgLivingArea;
+
+  return Math.round(pricePerSqm);
+}
+
+function calculatePricePerSqm(price, livingArea) {
+  // Check if both inputs are valid numbers
+  if (!price || !livingArea || isNaN(price) || isNaN(livingArea) || livingArea <= 0) {
+    console.error('Invalid input for price per sqm calculation:', { price, livingArea });
+    return null;
+  }
+
+  // Calculate price per square meter and round to nearest integer
+  const pricePerSqm = Math.round(price / livingArea);
+
+  // Format the result with thousand separators
+  const formattedPrice = new Intl.NumberFormat('en-EN', {
+    style: 'currency',
+    currency: 'EUR',
+    maximumFractionDigits: 0
+  }).format(pricePerSqm);
+
+  return {
+    value: pricePerSqm,
+    formatted: formattedPrice,
+    price: price,
+    livingArea: livingArea
   };
 }
