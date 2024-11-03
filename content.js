@@ -275,10 +275,10 @@ function createWozSection(wozWaarden) {
   section += "</ul>";
 
   if (sortedWozWaarden.length > 3) {
-    section += `<button id="show-more-woz">Meer weergeven</button>`;
+    section += `<button id="show-more-woz">Show more</button>`;
   }
 
-  // Add event listener for the "Meer weergeven" button
+  // Add event listener for the "Show more" button
   setTimeout(() => {
     const showMoreButton = document.getElementById('show-more-woz');
     if (showMoreButton) {
@@ -288,10 +288,10 @@ function createWozSection(wozWaarden) {
 
         if (hiddenItems.length > 0) {
           hiddenItems.forEach(item => item.style.display = '');
-          showMoreButton.textContent = 'Minder weergeven';
+          showMoreButton.textContent = 'Show less';
         } else {
           Array.from(wozList.children).slice(3).forEach(item => item.style.display = 'none');
-          showMoreButton.textContent = 'Meer weergeven';
+          showMoreButton.textContent = 'Show more';
         }
       });
     }
@@ -423,7 +423,6 @@ function injectStyles() {
     
     #ai-summary-loader {
       position: relative;
-      padding: 20px;
       min-height: 200px;
       min-width: 250px;
       display: flex;
@@ -523,6 +522,27 @@ function injectStyles() {
     .placeholder-container {
       opacity: 0.3;  /* Make placeholders more subtle */
     }
+
+    #translation-language {
+      padding: 8px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      width: 100%;
+      font-size: 14px;
+      background-color: white;
+      cursor: pointer;
+    }
+
+    #translation-language:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    #translation-language:focus {
+      outline: none;
+      border-color: #4CAF50;
+      box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+    }
   `;
   document.head.appendChild(style);
 }
@@ -530,6 +550,49 @@ function injectStyles() {
 function injectSidePanel() {
   const panel = document.createElement('div');
   panel.id = 'ai-summary-panel';
+  
+  // Create translation controls but don't add them yet
+  const translationControls = document.createElement('div');
+  translationControls.id = 'translation-controls';
+  translationControls.style.cssText = `
+    margin-bottom: 15px;
+    display: none;  // Hidden by default
+  `;
+  
+  const languageSelect = document.createElement('select');
+  languageSelect.id = 'translation-language';
+  const languages = [
+    ['en', 'English (Original)'],
+    ['ar', 'Arabic'],
+    ['bn', 'Bengali'],
+    ['de', 'German'],
+    ['es', 'Spanish'],
+    ['fr', 'French'],
+    ['hi', 'Hindi'],
+    ['it', 'Italian'],
+    ['ja', 'Japanese'],
+    ['ko', 'Korean'],
+    ['nl', 'Dutch'],
+    ['pl', 'Polish'],
+    ['pt', 'Portuguese'],
+    ['ru', 'Russian'],
+    ['th', 'Thai'],
+    ['tr', 'Turkish'],
+    ['vi', 'Vietnamese'],
+    ['zh', 'Chinese (Simplified)'],
+    ['zh-Hant', 'Chinese (Traditional)']
+  ];
+  
+  languages.forEach(([code, name]) => {
+    const option = document.createElement('option');
+    option.value = code;
+    option.textContent = name;
+    languageSelect.appendChild(option);
+  });
+
+  translationControls.appendChild(languageSelect);
+  panel.appendChild(translationControls);
+
   panel.style.cssText = `
     position: fixed;
     top: 0;
@@ -666,9 +729,13 @@ function togglePanel() {
 function toggleLoader(show) {
   const loader = document.getElementById('ai-summary-loader');
   const summaryContent = document.getElementById('ai-summary-content');
-  if (loader && summaryContent) {
+  const translationControls = document.getElementById('translation-controls');
+  
+  if (loader && summaryContent && translationControls) {
     loader.style.display = show ? 'block' : 'none';
     summaryContent.style.display = show ? 'none' : 'block';
+    // Show translation controls only when loader is hidden and summary is shown
+    translationControls.style.display = show ? 'none' : 'block';
   }
 }
 
@@ -897,3 +964,164 @@ function calculatePricePerSqm(price, livingArea) {
     livingArea: livingArea
   };
 }
+
+async function translateContent(content, targetLanguage) {
+  try {
+    const canTranslate = await translation.canTranslate({
+      sourceLanguage: 'en',
+      targetLanguage: targetLanguage
+    });
+
+    if (canTranslate === 'no') {
+      throw new Error(`Translation to ${targetLanguage} is not supported`);
+    }
+
+    const translator = await translation.createTranslator({
+      sourceLanguage: 'en',
+      targetLanguage: targetLanguage
+    });
+
+    if (canTranslate === 'after-download') {
+      await translator.ready;
+    }
+
+    // Create a temporary div to parse HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = content;
+
+    // Store info icons to preserve their functionality
+    const infoIcons = tempDiv.querySelectorAll('.info-icon');
+    infoIcons.forEach((icon, index) => {
+      icon.setAttribute('data-preserve', `info-${index}`);
+    });
+
+    // Translate the content
+    const translateNode = async (node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        // Translate text nodes that aren't empty
+        if (node.textContent.trim()) {
+          node.textContent = await translator.translate(node.textContent);
+        }
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        // Skip translation of info icons
+        if (node.classList.contains('info-icon')) {
+          return;
+        }
+
+        // Translate all child nodes recursively
+        for (const child of Array.from(node.childNodes)) {
+          await translateNode(child);
+        }
+      }
+    };
+
+    await translateNode(tempDiv);
+
+    // Restore info icons
+    const originalIcons = document.querySelectorAll('.info-icon');
+    const translatedIcons = tempDiv.querySelectorAll('.info-icon');
+    translatedIcons.forEach((icon, index) => {
+      if (originalIcons[index]) {
+        icon.outerHTML = originalIcons[index].outerHTML;
+      }
+    });
+
+    return tempDiv.innerHTML;
+  } catch (error) {
+    console.error('Translation error:', error);
+    throw error;
+  }
+}
+
+// After translation, reattach event listeners
+document.addEventListener('change', async function(event) {
+  if (event.target && event.target.id === 'translation-language') {
+    const summaryContent = document.getElementById('ai-summary-content');
+    const languageSelect = event.target;
+    
+    if (!summaryContent) return;
+
+    const targetLanguage = languageSelect.value;
+    
+    // Save original content if not already saved
+    if (!summaryContent.hasAttribute('data-original-content')) {
+      summaryContent.setAttribute('data-original-content', summaryContent.innerHTML);
+    }
+
+    // If English is selected, show original content
+    if (targetLanguage === 'en') {
+      summaryContent.innerHTML = summaryContent.getAttribute('data-original-content');
+      summaryContent.removeAttribute('data-current-language');
+      return;
+    }
+
+    // If already translated to this language, do nothing
+    if (summaryContent.getAttribute('data-current-language') === targetLanguage) {
+      return;
+    }
+
+    // Show loading state
+    languageSelect.disabled = true;
+    
+    try {
+      const translatedContent = await translateContent(
+        summaryContent.getAttribute('data-original-content'), 
+        targetLanguage
+      );
+      summaryContent.innerHTML = translatedContent;
+      summaryContent.setAttribute('data-current-language', targetLanguage);
+
+      // Reattach event listeners after translation
+      const infoIcons = document.querySelectorAll('.info-icon');
+      infoIcons.forEach((icon, index) => {
+        icon.addEventListener('click', () => {
+          const details = document.getElementById(`prediction-${index}`);
+          if (details) {
+            details.style.display = details.style.display === 'none' ? 'block' : 'none';
+          }
+        });
+      });
+
+      // Translate and store the button texts
+      const translator = await translation.createTranslator({
+        sourceLanguage: 'en',
+        targetLanguage: targetLanguage
+      });
+
+      const showMoreText = await translator.translate('Show more');
+      const showLessText = await translator.translate('Show less');
+
+      // Reattach show more WOZ values button listener with translated texts
+      const showMoreButton = document.getElementById('show-more-woz');
+      if (showMoreButton) {
+        // Store the translated texts as data attributes
+        showMoreButton.setAttribute('data-show-more', showMoreText);
+        showMoreButton.setAttribute('data-show-less', showLessText);
+        
+        showMoreButton.addEventListener('click', () => {
+          const wozList = document.getElementById('woz-list');
+          const hiddenItems = wozList.querySelectorAll('li[style="display: none;"]');
+
+          if (hiddenItems.length > 0) {
+            hiddenItems.forEach(item => item.style.display = '');
+            showMoreButton.textContent = showMoreButton.getAttribute('data-show-less');
+          } else {
+            Array.from(wozList.children).slice(3).forEach(item => item.style.display = 'none');
+            showMoreButton.textContent = showMoreButton.getAttribute('data-show-more');
+          }
+        });
+
+        // Set initial button text
+        showMoreButton.textContent = showMoreText;
+      }
+
+    } catch (error) {
+      console.error('Translation failed:', error);
+      alert(`Translation failed: ${error.message}`);
+      summaryContent.innerHTML = summaryContent.getAttribute('data-original-content');
+      languageSelect.value = 'en';
+    } finally {
+      languageSelect.disabled = false;
+    }
+  }
+});
