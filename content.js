@@ -2,7 +2,7 @@ function comparePropertyPricePerSqm(propertyPricePerSqm, avgPricePerSqmNeighborh
   // Allow for a 5% margin to consider prices "equal"
   const margin = 0.05;
   const ratio = propertyPricePerSqm / avgPricePerSqmNeighborhood;
-  
+
   if (ratio > 1 + margin) {
     return "HIGHER";
   } else if (ratio < 1 - margin) {
@@ -25,12 +25,35 @@ async function extractPropertyInfo() {
   jsonData = Object.fromEntries(
     Object.entries(jsonData).filter(([_, value]) => {
       if (typeof value !== 'string') return false;
-      
-      // Keep strings that are not just numbers, except 4-digit years
+
+      // Filter out strings with more than 500 consecutive characters
+      if (value.match(/[^\s]{500,}/)) return false;
+      // Filter out image file extensions
+      if (/\.(jpg|png|bmp|webp)$/i.test(value)) return false;
+      // Filter out URLs
+      if (value.startsWith('http')) return false;
+
+      // Filter out duplicate strings (case-insensitive)
+      // Use a static Set to persist across function calls
+      if (!extractPropertyInfo.seenStrings) {
+        extractPropertyInfo.seenStrings = new Set();
+      }
+      const lowerValue = value.toLowerCase();
+      if (extractPropertyInfo.seenStrings.has(lowerValue)) return false;
+      extractPropertyInfo.seenStrings.add(lowerValue);
+
+      // Filter out hyphenated technical terms, but keep regular sentences that may contain them
+      if (value.includes('-') && !value.includes(' ')) return false;
+
+      // Filter out hash-like strings (long strings of hex characters)
+      if (/^[a-f0-9]{32,}$/i.test(value)) return false;
+
+      if ((value.match(/\//g) || []).length > 6) return false;
       if (/^\d+\/\d+\/\d+$/.test(value)) return false;
       if (!/^\d+$/.test(value)) return true;
+      // Keep strings that are not just numbers, except 4-digit years
       if (/^\d{4}$/.test(value)) return true;
-      
+
       return false;
     })
   );
@@ -48,49 +71,89 @@ async function extractPropertyInfo() {
   const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
 
   // First, get the basic property info from Gemini without neighborhood stats
-  const initialPrompt = `
+  // Split jsonData into chunks of max 500 tokens each
+  const jsonEntries = Object.entries(jsonData);
+  const chunks = [];
+  let currentChunk = [];
+  let currentTokenCount = 0;
 
-This is a request to extract the following information from JSON data:
-1. Title: combination of street, house number, postal code and city
-2. Price: asking price
-3. Features: List of all amenities such as: garden, garage, sauna, hot tub, charging station, parking space, heat pump, attic and shed)
-4. Description: Give a summarized description of the property, preferably under 150 words)
-5. Details: Mention if available: year of construction, type of house/residence, living area, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)
+  for (const entry of jsonEntries) {
+    // Rough estimate: 1 char ≈ 1 token for Latin text
+    const dataInPromptLength = JSON.stringify(entry).length;
 
-Please convert the following real estate data into JSON format with these fields:
-{
-  title: string,
-  price: number,
-  features: array of strings,
-  description: string,
-  details: object
-}
+    if (currentTokenCount + dataInPromptLength > 1000) {
+      // When the current chunk gets too large:
+      // 1. Convert the array of entries back into an object and add it to chunks
+      // 2. Reset the current chunk array to empty
+      // 3. Reset the token count to 0
+      chunks.push(Object.fromEntries(currentChunk));
+      currentChunk = [];
+      currentTokenCount = 0;
+    }
 
-Only return the JSON object, nothing else.
-${JSON.stringify(jsonData)}`;
+    currentChunk.push(entry);
+    currentTokenCount += dataInPromptLength;
+  }
 
-  // Get initial property info
-  const initialResult = await fetchGemini(geminiEndpoint, geminiApiKey, initialPrompt);
-  console.log(initialResult.candidates[0].content.parts[0].text);
-  const initialInfo = JSON.parse(initialResult.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
+  // Push the last chunk if it has any entries
+  if (currentChunk.length > 0) {
+    chunks.push(Object.fromEntries(currentChunk));
+  }
 
-  // Now we can get neighborhood stats using the correct address
-  const neighborhoodStats = await getNeighborhoodStats(initialInfo.title);
+  const basePrompt = `
+I will provide you with chunks of JSON data of a real estate property. When all the chunks are provided, I will ask you to extract specific information.
+`;
 
-  if (neighborhoodStats) {
-    const avgPurchasePriceNeighborhood = neighborhoodStats.averagePrice;
-    const avgPricePerSqmNeighborhood = neighborhoodStats.pricePerSqm;
-    const neighborhood = neighborhoodStats.neighborhood;
-    const municipality = neighborhoodStats.municipality;
+  // Initialize model
+  const initModel = await ai.languageModel.create({
+    temperature: 0.05,
+    topK: 3,
+    systemPrompt: basePrompt
+  });
 
-    const propertyPricePerSqm = calculatePricePerSqm(initialInfo.price, initialInfo.details["living area"]);
-    const avgPriceComparisonSqm = comparePropertyPricePerSqm(propertyPricePerSqm.value, avgPricePerSqmNeighborhood);
+  const initResult = await initModel.prompt(basePrompt);
+  console.log('initResult:', initResult);
 
-    // Now get the price analysis with the neighborhood stats
-    const priceAnalysisPrompt = `You are a real estate expert. Based on the following information, provide a price analysis:
+  for (let i = 0; i < chunks.length; i++) {
+    console.log('Processing chunk', i + 1);
+    const chunkPrompt = `Just read & remember the data and don't respond: ${JSON.stringify(chunks[i])}`;
+    console.log('chunkPrompt:', chunkPrompt);
+    const chunkResult = await initModel.prompt(chunkPrompt);
+    console.log('chunkResult:', chunkResult);
+
+    if (i === chunks.length - 1) {
+      console.log('Final chunk');
+      const finalResult = await initModel.prompt(`
+Return me the data in JSON format (make sure integers are wrapped in Strings):\n
+{\n
+  title: string, (combination of street, house number, postal code and city. Like this: Streetname 1-A1, 1234 AB City)\n
+  price: integer, (the property price)\n
+  features: array of strings, (List of all amenities such as: garden, garage, sauna, hot tub, charging station, parking space, heat pump, attic and shed)\n
+  description: string, (summarized description of the property, preferably under 150 words)\n
+  details: object (Mention if available: year of construction, type of house/residence, living area, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)\n
+}`);
+
+      console.log('finalResult:', finalResult);
+      const jsonMatch = finalResult.match(/```json\n([\s\S]*?)\n```/);
+      const propertyJsonData = JSON.parse(jsonMatch ? jsonMatch[1] : finalResult);
+      console.log('propertyJsonData:', propertyJsonData);
+
+      const neighborhoodStats = await getNeighborhoodStats(propertyJsonData.title);
+
+      if (neighborhoodStats) {
+        const avgPurchasePriceNeighborhood = neighborhoodStats.averagePrice;
+        const avgPricePerSqmNeighborhood = neighborhoodStats.pricePerSqm;
+        const neighborhood = neighborhoodStats.neighborhood;
+        const municipality = neighborhoodStats.municipality;
+
+        const propertyPricePerSqm = calculatePricePerSqm(propertyJsonData.price, propertyJsonData.details["living area"]);
+        const avgPriceComparisonSqm = comparePropertyPricePerSqm(propertyPricePerSqm.value, avgPricePerSqmNeighborhood);
+
+        const priceAnalysisPrompt = `
+You are a real estate expert. Based on the following information, provide a price analysis:
 
 Property Information:
-- Price: €${initialInfo.price}
+- Price: €${propertyJsonData.price}
 - Price per sqm: €${propertyPricePerSqm.value}
 - Average price per sqm in area: €${avgPricePerSqmNeighborhood}
 - Average purchase price in ${neighborhood}, ${municipality}: €${avgPurchasePriceNeighborhood}
@@ -98,7 +161,7 @@ Property Information:
 
 Please analyze if this represents good value for an investor and provide:
 1. A classification of the price as 'high', 'low' or 'average'
-2. A detailed explanation starting with "The asking price €${initialInfo.price} is X because: [reasons]"
+2. A detailed explanation starting with "The asking price €${propertyJsonData.price} is X because: [reasons]"
 3. List 5 pros and cons for investors
 
 Return the response in this JSON format:
@@ -109,38 +172,40 @@ Return the response in this JSON format:
   cons: array of strings
 }`;
 
-    const priceAnalysisResult = await fetchGemini(geminiEndpoint, geminiApiKey, priceAnalysisPrompt);
-    const priceAnalysis = JSON.parse(priceAnalysisResult.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
+        const priceAnalysisResult = await fetchGemini(geminiEndpoint, geminiApiKey, priceAnalysisPrompt);
+        const priceAnalysis = JSON.parse(priceAnalysisResult.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
 
-    // Combine all the information
-    return {
-      title: initialInfo.title ?? '',
-      address: initialInfo.title ?? '',
-      price: initialInfo.price ?? 0,
-      features: initialInfo.features ?? [],
-      description: initialInfo.description ?? '',
-      details: initialInfo.details ?? {},
-      price_comparison: priceAnalysis.price_comparison ?? '',
-      price_comparison_explanation: priceAnalysis.price_comparison_explanation ?? '',
-      pros: priceAnalysis.pros ?? [],
-      cons: priceAnalysis.cons ?? []
-    };
+        return {
+          title: propertyJsonData.title ?? '',
+          address: propertyJsonData.title ?? '',
+          price: propertyJsonData.price ?? 0,
+          features: propertyJsonData.features ?? [],
+          description: propertyJsonData.description ?? '',
+          details: propertyJsonData.details ?? {},
+          price_comparison: priceAnalysis.price_comparison ?? '',
+          price_comparison_explanation: priceAnalysis.price_comparison_explanation ?? '',
+          pros: priceAnalysis.pros ?? [],
+          cons: priceAnalysis.cons ?? []
+        };
+      }
+
+      return {
+        title: propertyJsonData.title ?? '',
+        address: propertyJsonData.title ?? '',
+        price: propertyJsonData.price ?? 0,
+        features: propertyJsonData.features ?? [],
+        description: propertyJsonData.description ?? '',
+        details: propertyJsonData.details ?? {},
+        price_comparison: '',
+        price_comparison_explanation: '',
+        pros: [],
+        cons: []
+      };
+    }
   }
-
-  // Return basic info if neighborhood stats couldn't be retrieved
-  return {
-    title: initialInfo.title ?? '',
-    address: initialInfo.title ?? '',
-    price: initialInfo.price ?? 0,
-    features: initialInfo.features ?? [],
-    description: initialInfo.description ?? '',
-    details: initialInfo.details ?? {},
-    price_comparison: '',
-    price_comparison_explanation: '',
-    pros: [],
-    cons: []
-  };
 }
+
+
 
 async function createSummary(propertyInfo) {
   if (!propertyInfo) {
@@ -550,7 +615,7 @@ function injectStyles() {
 function injectSidePanel() {
   const panel = document.createElement('div');
   panel.id = 'ai-summary-panel';
-  
+
   // Create translation controls but don't add them yet
   const translationControls = document.createElement('div');
   translationControls.id = 'translation-controls';
@@ -558,7 +623,7 @@ function injectSidePanel() {
     margin-bottom: 15px;
     display: none;  // Hidden by default
   `;
-  
+
   const languageSelect = document.createElement('select');
   languageSelect.id = 'translation-language';
   const languages = [
@@ -582,7 +647,7 @@ function injectSidePanel() {
     ['zh', 'Chinese (Simplified)'],
     ['zh-Hant', 'Chinese (Traditional)']
   ];
-  
+
   languages.forEach(([code, name]) => {
     const option = document.createElement('option');
     option.value = code;
@@ -730,7 +795,7 @@ function toggleLoader(show) {
   const loader = document.getElementById('ai-summary-loader');
   const summaryContent = document.getElementById('ai-summary-content');
   const translationControls = document.getElementById('translation-controls');
-  
+
   if (loader && summaryContent && translationControls) {
     loader.style.display = show ? 'block' : 'none';
     summaryContent.style.display = show ? 'none' : 'block';
@@ -1034,15 +1099,15 @@ async function translateContent(content, targetLanguage) {
 }
 
 // After translation, reattach event listeners
-document.addEventListener('change', async function(event) {
+document.addEventListener('change', async function (event) {
   if (event.target && event.target.id === 'translation-language') {
     const summaryContent = document.getElementById('ai-summary-content');
     const languageSelect = event.target;
-    
+
     if (!summaryContent) return;
 
     const targetLanguage = languageSelect.value;
-    
+
     // Save original content if not already saved
     if (!summaryContent.hasAttribute('data-original-content')) {
       summaryContent.setAttribute('data-original-content', summaryContent.innerHTML);
@@ -1062,10 +1127,10 @@ document.addEventListener('change', async function(event) {
 
     // Show loading state
     languageSelect.disabled = true;
-    
+
     try {
       const translatedContent = await translateContent(
-        summaryContent.getAttribute('data-original-content'), 
+        summaryContent.getAttribute('data-original-content'),
         targetLanguage
       );
       summaryContent.innerHTML = translatedContent;
@@ -1097,7 +1162,7 @@ document.addEventListener('change', async function(event) {
         // Store the translated texts as data attributes
         showMoreButton.setAttribute('data-show-more', showMoreText);
         showMoreButton.setAttribute('data-show-less', showLessText);
-        
+
         showMoreButton.addEventListener('click', () => {
           const wozList = document.getElementById('woz-list');
           const hiddenItems = wozList.querySelectorAll('li[style="display: none;"]');
