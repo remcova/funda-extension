@@ -48,6 +48,9 @@ async function extractPropertyInfo() {
       // Filter out hash-like strings (long strings of hex characters)
       if (/^[a-f0-9]{32,}$/i.test(value)) return false;
 
+      // Filter out strings longer than 1000 characters to avoid extremely long property descriptions
+      if (value.length > 1000) return false;
+
       if ((value.match(/\//g) || []).length > 6) return false;
       if (/^\d+\/\d+\/\d+$/.test(value)) return false;
       if (!/^\d+$/.test(value)) return true;
@@ -58,20 +61,10 @@ async function extractPropertyInfo() {
     })
   );
 
-  // Get the API key from storage
-  const { geminiApiKey } = await chrome.storage.sync.get(['geminiApiKey']);
-
-  if (!geminiApiKey) {
-    console.error('Gemini API key not set');
-    return null;
-  }
-
   console.log('JSON DATA:', jsonData);
 
-  const geminiEndpoint = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
-
   // First, get the basic property info from Gemini without neighborhood stats
-  // Split jsonData into chunks of max 500 tokens each
+  // Split jsonData into chunks of max 1000 tokens each
   const jsonEntries = Object.entries(jsonData);
   const chunks = [];
   let currentChunk = [];
@@ -101,13 +94,14 @@ async function extractPropertyInfo() {
   }
 
   const basePrompt = `
-I will provide you with chunks of JSON data of a real estate property. When all the chunks are provided, I will ask you to extract specific information.
+You only respond when I say so. I will provide you with chunks of JSON data of a real estate property you should remember. When all the chunks are provided, I will ask you to extract specific information. Don't respond, only when you have the JSON data ready. Tip: the living area size is always the first square meter value you read, save that.
 `;
 
   // Initialize model
   const initModel = await ai.languageModel.create({
-    temperature: 0.05,
-    topK: 3,
+    temperature: 1, // 0.4
+    topK: 1, // 1
+    topP: 0.5,
     systemPrompt: basePrompt
   });
 
@@ -116,7 +110,8 @@ I will provide you with chunks of JSON data of a real estate property. When all 
 
   for (let i = 0; i < chunks.length; i++) {
     console.log('Processing chunk', i + 1);
-    const chunkPrompt = `Just read & remember the data and don't respond: ${JSON.stringify(chunks[i])}`;
+    const chunkPrompt = `Just read & remember the data and don't respond: ${JSON.stringify(chunks[i])}\n.
+`;
     console.log('chunkPrompt:', chunkPrompt);
     const chunkResult = await initModel.prompt(chunkPrompt);
     console.log('chunkResult:', chunkResult);
@@ -124,13 +119,13 @@ I will provide you with chunks of JSON data of a real estate property. When all 
     if (i === chunks.length - 1) {
       console.log('Final chunk');
       const finalResult = await initModel.prompt(`
-Return me the data in JSON format (make sure integers are wrapped in Strings):\n
+Return the property data in JSON format, don't respond with anything else (make sure integers are wrapped in Strings):\n
 {\n
-  title: string, (combination of street, house number, postal code and city. Like this: Streetname 1-A1, 1234 AB City)\n
-  price: integer, (the property price)\n
-  features: array of strings, (List of all amenities such as: garden, garage, sauna, hot tub, charging station, parking space, heat pump, attic and shed)\n
-  description: string, (summarized description of the property, preferably under 150 words)\n
-  details: object (Mention if available: year of construction, type of house/residence, living area, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)\n
+  title: string, (returns: street, house number, postal code and city. Example: Streetname 1-A1, 1234 AB City)\n
+  price: string, (return price starting with '€' and ends on 'k.k.', so like '€ XXX.XXX k.k.')\n
+  features: array of strings, (returns the 10 most important amenities such as: garden, garage, sauna, hot tub, charging station, parking space, heat pump, attic and shed)\n
+  description: string, (Returns summarized description of the property under 150 words)\n
+  details: object (keys-value pairs), (Returns: living area, year of construction, type of house/residence, storage space, number of rooms, bathroom, floors, bathroom facilities, energy label, heating, insulation, furnished, upholstered, permanent residence allowed, sauna, hot tub)\n
 }`);
 
       console.log('finalResult:', finalResult);
@@ -141,27 +136,31 @@ Return me the data in JSON format (make sure integers are wrapped in Strings):\n
       const neighborhoodStats = await getNeighborhoodStats(propertyJsonData.title);
 
       if (neighborhoodStats) {
-        const avgPurchasePriceNeighborhood = neighborhoodStats.averagePrice;
+        const avgPurchasePriceNeighborhood = new Intl.NumberFormat('en-DE').format(neighborhoodStats.averagePrice);
+        
         const avgPricePerSqmNeighborhood = neighborhoodStats.pricePerSqm;
         const neighborhood = neighborhoodStats.neighborhood;
         const municipality = neighborhoodStats.municipality;
+        const livingArea = propertyJsonData.details["living area"].replace(/\s|m²/g, '');
 
-        const propertyPricePerSqm = calculatePricePerSqm(propertyJsonData.price, propertyJsonData.details["living area"]);
-        const avgPriceComparisonSqm = comparePropertyPricePerSqm(propertyPricePerSqm.value, avgPricePerSqmNeighborhood);
+        const propertyPrice = propertyJsonData.price.replace(/\s|€|k\.k\.|[.]/g, '');
+        
+        const propertyPricePerSqm = calculatePricePerSqm(propertyPrice, livingArea).value;
+        const avgPriceComparisonSqm = comparePropertyPricePerSqm(propertyPricePerSqm, avgPricePerSqmNeighborhood);
 
         const priceAnalysisPrompt = `
 You are a real estate expert. Based on the following information, provide a price analysis:
 
 Property Information:
-- Price: €${propertyJsonData.price}
-- Price per sqm: €${propertyPricePerSqm.value}
+- Price: €${propertyPrice}
+- Price per sqm: €${propertyPricePerSqm}
 - Average price per sqm in area: €${avgPricePerSqmNeighborhood}
 - Average purchase price in ${neighborhood}, ${municipality}: €${avgPurchasePriceNeighborhood}
 - The property per square meter price is ${avgPriceComparisonSqm} than the average in the area
 
 Please analyze if this represents good value for an investor and provide:
 1. A classification of the price as 'high', 'low' or 'average'
-2. A detailed explanation starting with "The asking price €${propertyJsonData.price} is X because: [reasons]"
+2. A detailed explanation starting with "The asking price €${propertyPrice} is X because: [reasons]"
 3. List 5 pros and cons for investors
 
 Return the response in this JSON format:
@@ -172,8 +171,20 @@ Return the response in this JSON format:
   cons: array of strings
 }`;
 
-        const priceAnalysisResult = await fetchGemini(geminiEndpoint, geminiApiKey, priceAnalysisPrompt);
-        const priceAnalysis = JSON.parse(priceAnalysisResult.candidates[0].content.parts[0].text.replace(/```json|```/g, ''));
+        initModel.destroy(); // destroy previous model session after use
+
+        console.log('priceAnalysisPrompt:', priceAnalysisPrompt);
+
+        const priceAnalysisModel = await ai.languageModel.create({
+          temperature: 0.05,
+          topK: 1,
+          systemPrompt: priceAnalysisPrompt
+        });
+        const priceAnalysisResult = await priceAnalysisModel.prompt(priceAnalysisPrompt);
+        console.log('priceAnalysisResult:', priceAnalysisResult);
+        const priceAnalysis = JSON.parse(priceAnalysisResult.replace(/```json|```/g, ''));
+
+        priceAnalysisModel.destroy(); // destroy price analysis model session after use
 
         return {
           title: propertyJsonData.title ?? '',
@@ -203,6 +214,8 @@ Return the response in this JSON format:
       };
     }
   }
+
+  
 }
 
 
@@ -1011,6 +1024,8 @@ function calculatePricePerSqm(price, livingArea) {
     console.error('Invalid input for price per sqm calculation:', { price, livingArea });
     return null;
   }
+
+  console.log('LIVING AREA:', livingArea);
 
   // Calculate price per square meter and round to nearest integer
   const pricePerSqm = Math.round(price / livingArea);
