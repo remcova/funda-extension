@@ -416,35 +416,6 @@ function createValuePredictionSection(valuePrediction) {
   return section;
 }
 
-async function fetchGemini(endpoint, apiKey, prompt) {
-  const response = await fetch(`${endpoint}?key=${apiKey}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      contents: [{
-        parts: [{
-          text: prompt
-        }]
-      }],
-      generationConfig: {
-        temperature: 0.05,
-        topP: 0.8,
-        topK: 1,
-      }
-    })
-  });
-
-  const result = await response.json();
-
-  if (!result.candidates || result.candidates.length === 0) {
-    throw new Error('No response from Gemini API');
-  }
-
-  return result;
-}
-
 document.addEventListener('click', function (event) {
   if (event.target && event.target.id === 'show-more-woz') {
     const allWozWaarden = document.getElementById('all-woz-waarden');
