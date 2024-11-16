@@ -112,7 +112,7 @@ You only respond when I say so. I will provide you with chunks of JSON data of a
     console.log('Processing chunk', i + 1);
     const chunkPrompt = `Just read & remember the data and don't respond: ${JSON.stringify(chunks[i])}\n.
 `;
-    console.log('chunkPrompt:', chunkPrompt);
+    // console.log('chunkPrompt:', chunkPrompt);
     const chunkResult = await initModel.prompt(chunkPrompt);
     console.log('chunkResult:', chunkResult);
 
@@ -173,7 +173,7 @@ Return the response in this JSON format:
 
         initModel.destroy(); // destroy previous model session after use
 
-        console.log('priceAnalysisPrompt:', priceAnalysisPrompt);
+        // console.log('priceAnalysisPrompt:', priceAnalysisPrompt);
 
         const priceAnalysisModel = await ai.languageModel.create({
           temperature: 0.05,
@@ -812,7 +812,7 @@ async function getWozValues(address) {
   const suggestData = await suggestResponse.json();
   let addressId = null;
 
-  console.log(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1000`);
+  // console.log(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1000`);
 
   console.log('Suggest data:', suggestData);
   console.log('Address:', address);
@@ -929,7 +929,7 @@ async function getNeighborhoodStats(address) {
   const suggestResponse = await fetch(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1`);
   const suggestData = await suggestResponse.json();
 
-  console.log('Neighborhood suggest:', `https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1`);
+  // console.log('Neighborhood suggest:', `https://api.pdok.nl/bzk/locatieserver/search/v3_1/suggest?q=${encodeURIComponent(address)}&rows=1`);
 
   if (!suggestData.response?.docs?.[0]?.id) {
     console.error('Could not find BAG id for address:', address);
@@ -940,7 +940,7 @@ async function getNeighborhoodStats(address) {
   const lookupResponse = await fetch(`https://api.pdok.nl/bzk/locatieserver/search/v3_1/lookup?id=${suggestData.response.docs[0].id}`);
   const lookupData = await lookupResponse.json();
 
-  console.log('Neighborhood lookup:', `https://api.pdok.nl/bzk/locatieserver/search/v3_1/lookup?id=${suggestData.response.docs[0].id}`);
+  // console.log('Neighborhood lookup:', `https://api.pdok.nl/bzk/locatieserver/search/v3_1/lookup?id=${suggestData.response.docs[0].id}`);
 
   if (!lookupData.response?.docs?.[0]?.buurtcode) {
     console.error('Could not find neighborhood code');
