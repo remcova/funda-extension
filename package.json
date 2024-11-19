@@ -1,0 +1,21 @@
+{
+    "name": "funda-property-summarizer",
+    "version": "2.0.0",
+    "scripts": {
+        "lint": "eslint src/**/*.ts",
+        "dev": "webpack --watch --mode=development",
+        "prod": "webpack --mode=production"
+    },
+    "devDependencies": {
+        "@types/chrome": "^0.0.283",
+        "@typescript-eslint/eslint-plugin": "^5.x.x",
+        "@typescript-eslint/parser": "^5.x.x",
+        "chrome-types": "^0.1.321",
+        "copy-webpack-plugin": "^12.0.2",
+        "eslint": "^8.x.x",
+        "ts-loader": "^9.x.x",
+        "typescript": "^4.x.x",
+        "webpack": "^5.x.x",
+        "webpack-cli": "^4.x.x"
+    }
+}
