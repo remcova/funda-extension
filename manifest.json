@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Funda Property Summarizer",
+  "name": "Real Estate Property Analyser",
   "version": "1.0",
-  "description": "Summarizes property information from Funda listings",
+  "description": "Analyse real estate properties on Funda.nl.",
   "permissions": [
     "activeTab",
     "storage"
