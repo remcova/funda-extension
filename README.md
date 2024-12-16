@@ -1,6 +1,7 @@
 ![alt text](https://i.ibb.co/BGVG7w5/Real-Estate-Property-Analyzer.jpg)
 ---
-Main branch is stable branch.
+- Main branch is stable branch and contains the version that uses the built-in AI.
+- gemini_nano_v2 is a hybrid version. It uses the built-in AI and the Gemini Nano API.
 
 ## Demo
 **Complete** video (3:20 min): 
